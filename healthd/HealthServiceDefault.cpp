@@ -30,8 +30,8 @@ int healthd_board_battery_update(struct android::BatteryProperties*) {
     // Implementation-defined update logic goes here. An implementation
     // can make modifications to prop before broadcasting it to all callbacks.
 
-    // return 0 to log periodic polled battery status to kernel log
-    return 0;
+    // return 1 to not log periodic polled battery status to kernel log
+    return 1;
 }
 
 int main() {

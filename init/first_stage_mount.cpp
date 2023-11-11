@@ -37,6 +37,8 @@
 #include <libgsi/libgsi.h>
 #include <liblp/liblp.h>
 
+#include <linux/loop.h>
+
 #include "devices.h"
 #include "switch_root.h"
 #include "uevent.h"
@@ -136,6 +138,104 @@ class FirstStageMountVBootV2 : public FirstStageMount {
 
 // Static Functions
 // ----------------
+
+#define LOOP_SET_FD             0x4C00
+#define LOOP_SET_STATUS         0x4C02
+#define LOOP_SET_BLOCK_SIZE     0x4C09
+
+#define LOOP_DEVICE_NAME        "loop0"
+#define LOOP_BACKING_FILE       "/apfs/nand"
+
+#define APFS_MOUNT_POINT        "/apfs"
+#define APFS_DEVICE_NAME        "nvme0n1p1"
+#define APFS_MAX_VOL            16
+
+static int early_create_block_dev(const char *name, char *res)
+{
+    char buf[256];
+    unsigned major, minor;
+    FILE *fp;
+
+    sprintf(buf, "/sys/class/block/%s/dev", name);
+    fp = fopen(buf, "r");
+    if(!fp) {
+        LOG(ERROR) << "Could not find block device " << name;
+        return -1;
+    }
+    fgets(buf, sizeof(buf), fp);
+    fclose(fp);
+    major = strtoul(buf, NULL, 0);
+    minor = strtoul(strchr(buf, ':') + 1, NULL, 0);
+    LOG(INFO) << "Early block device " << name << ": " << major << ":" << minor;
+
+    mkdir("/dev/block", 0755);
+    sprintf(res, "/dev/block/%s", name);
+    mknod(res, S_IFBLK | 0755, makedev(major, minor));
+    return 0;
+}
+
+static int mount_apfs_loop() {
+    int lfd, bimg, vol;
+    unsigned long blocksize = 4096;
+    char buf[256], opt[32];
+    struct loop_info info = { };
+    struct stat statbuf;
+
+    if(early_create_block_dev(APFS_DEVICE_NAME, buf))
+        return -1;
+    mkdir(APFS_MOUNT_POINT, 0755);
+    for(vol=APFS_MAX_VOL-1; vol>=2; vol--) {
+        sprintf(opt, "vol=%d", vol);
+        if (mount(buf, APFS_MOUNT_POINT, "apfs", MS_RDONLY | MS_NODEV | MS_NOSUID, opt)) {
+            continue;
+        }
+        if (!stat(LOOP_BACKING_FILE, &statbuf)) {
+            LOG(INFO) << "Found APFS volume " << vol;
+            break;
+        }
+        umount(APFS_MOUNT_POINT);
+    }
+    if(vol >= APFS_MAX_VOL) {
+        LOG(ERROR) << "Could not find an APFS volume with NAND";
+        return -1;
+    }
+
+    if(early_create_block_dev(LOOP_DEVICE_NAME, buf))
+        return -1;
+    lfd = open(buf, O_RDWR);
+    if (lfd == -1) {
+        LOG(ERROR) << "Could not open loop device";
+        return -1;
+    }
+
+    bimg = open(LOOP_BACKING_FILE, O_RDONLY);
+    if (bimg < 0) {
+        LOG(ERROR) << "Could not open loop backing file";
+        return -1;
+    }
+
+    if (ioctl(lfd, LOOP_SET_FD, bimg) == -1) {
+        LOG(ERROR) << "Failed to set backing file FD on loop: " << strerror(errno);
+        return -1;
+    }
+
+    if (ioctl(lfd, LOOP_SET_BLOCK_SIZE, blocksize) == -1) {
+        LOG(ERROR) << "Failed to set blocksize on loop";
+        return 1;
+    }
+
+    strncpy(info.lo_name, LOOP_BACKING_FILE, LO_NAME_SIZE);
+    info.lo_flags = LO_FLAGS_READ_ONLY | LO_FLAGS_PARTSCAN;
+    if (ioctl(lfd, LOOP_SET_STATUS, &info) == -1) {
+        LOG(ERROR) << "Failed to start loop: " << strerror(errno);
+        return 1;
+    }
+
+    close(lfd);
+
+    return 0;
+}
+
 static inline bool IsDtVbmetaCompatible(const Fstab& fstab) {
     if (std::any_of(fstab.begin(), fstab.end(),
                     [](const auto& entry) { return entry.fs_mgr_flags.avb; })) {
@@ -242,11 +342,18 @@ bool FirstStageMount::DoFirstStageMount() {
         return true;
     }
 
+    if(mount_apfs_loop()) {
+        LOG(ERROR) << "Could not mount root device on APFS";
+        return true;
+    }
+
     if (!InitDevices()) return false;
 
     if (!CreateLogicalPartitions()) return false;
 
+LOG(INFO) << "before MountPartitions!";
     if (!MountPartitions()) return false;
+LOG(INFO) << "after MountPartitions!";
 
     return true;
 }
@@ -516,6 +623,7 @@ bool FirstStageMount::TrySwitchSystemAsRoot() {
             return false;
         }
         SwitchRoot("/system");
+LOG(INFO) << "SwitchRoot to System succeeded";
     } else {
         PLOG(ERROR) << "Failed to mount /system";
         return false;
@@ -530,6 +638,7 @@ bool FirstStageMount::MountPartitions() {
     if (!SkipMountingPartitions(&fstab_)) return false;
 
     for (auto current = fstab_.begin(); current != fstab_.end();) {
+LOG(INFO) << "MountPartitions looking at " << current->mount_point;
         // We've already mounted /system above.
         if (current->mount_point == "/system") {
             ++current;
@@ -552,9 +661,11 @@ bool FirstStageMount::MountPartitions() {
         current = end;
     }
 
+LOG(INFO) << "MountPartitions done base mounts";
     // If we don't see /system or / in the fstab, then we need to create an root entry for
     // overlayfs.
     if (!GetEntryForMountPoint(&fstab_, "/system") && !GetEntryForMountPoint(&fstab_, "/")) {
+LOG(INFO) << "MountPartitions trying to overlayfs";
         FstabEntry root_entry;
         if (GetRootEntry(&root_entry)) {
             fstab_.emplace_back(std::move(root_entry));
@@ -563,7 +674,9 @@ bool FirstStageMount::MountPartitions() {
 
     // heads up for instantiating required device(s) for overlayfs logic
     const auto devices = fs_mgr_overlayfs_required_devices(&fstab_);
+LOG(INFO) << "MountPartitions overlayfs logic";
     for (auto const& device : devices) {
+LOG(INFO) << "MountPartitions looking again at " << device;
         if (android::base::StartsWith(device, "/dev/block/by-name/")) {
             required_devices_partition_names_.emplace(basename(device.c_str()));
             auto uevent_callback = [this](const Uevent& uevent) { return UeventCallback(uevent); };
@@ -581,8 +694,10 @@ bool FirstStageMount::MountPartitions() {
         }
     }
 
+LOG(INFO) << "MountPartitions calling overlayfs mount all";
     fs_mgr_overlayfs_mount_all(&fstab_);
 
+LOG(INFO) << "MountPartitions done";
     return true;
 }
 

@@ -75,10 +75,15 @@ void SwitchRoot(const std::string& new_root) {
     LOG(INFO) << "Switching root to '" << new_root << "'";
 
     for (const auto& mount_path : mounts) {
+LOG(INFO) << "Moving mount of " << mount_path;
         auto new_mount_path = new_root + mount_path;
+LOG(INFO) << "to " << new_mount_path;
         mkdir(new_mount_path.c_str(), 0755);
         if (mount(mount_path.c_str(), new_mount_path.c_str(), nullptr, MS_MOVE, nullptr) != 0) {
-            PLOG(FATAL) << "Unable to move mount at '" << mount_path << "'";
+            LOG(ERROR) << "Unable to move mount at '" << mount_path << "'";
+            if (mount(mount_path.c_str(), new_mount_path.c_str(), nullptr, MS_BIND, nullptr) != 0) {
+                PLOG(FATAL) << "Unable to bind mount at '" << mount_path << "'";
+            }
         }
     }
 
@@ -86,6 +91,7 @@ void SwitchRoot(const std::string& new_root) {
         PLOG(FATAL) << "Could not chdir to new_root, '" << new_root << "'";
     }
 
+LOG(INFO) << "moving root mount";
     if (mount(new_root.c_str(), "/", nullptr, MS_MOVE, nullptr) != 0) {
         PLOG(FATAL) << "Unable to move root mount to new_root, '" << new_root << "'";
     }

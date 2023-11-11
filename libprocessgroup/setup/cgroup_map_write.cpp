@@ -290,7 +290,7 @@ bool CgroupSetup() {
 
     if (getpid() != 1) {
         LOG(ERROR) << "Cgroup setup can be done only by init process";
-        return false;
+//        return false;
     }
 
     // Make sure we do this only one time. No need for std::call_once because

@@ -54,7 +54,7 @@ constexpr unsigned int div_round_up(unsigned int x, unsigned int y) {
   return (x + y - 1) / y;
 }
 
-static constexpr size_t kPageSize = 4096;
+static constexpr size_t kPageSize = 0x4000;
 static constexpr size_t kChunkSize = 256 * 1024;
 static constexpr size_t kUsableChunkSize = kChunkSize - kPageSize;
 static constexpr size_t kMaxBucketAllocationSize = kChunkSize / 4;
