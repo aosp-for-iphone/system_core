@@ -72,7 +72,7 @@ void healthd_board_init(struct healthd_config* config) {
 // TODO(b/68724651): Move this function into healthd_mode_service_2_0_battery_update
 // with logthis returned.
 int healthd_board_battery_update(struct android::BatteryProperties* props) {
-    int logthis = 0;
+    int logthis = 1;
 
     if (gHealth_1_0 == nullptr) {
         return logthis;

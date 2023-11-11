@@ -1008,7 +1008,7 @@ static void memory_stat_parse_line(char* line, struct memory_stat* mem_st) {
 
 static int memory_stat_from_cgroup(struct memory_stat* mem_st, int pid, uid_t uid) {
     FILE *fp;
-    char buf[PATH_MAX];
+    char buf[PAGE_SIZE];
 
     snprintf(buf, sizeof(buf), MEMCG_PROCESS_MEMORY_STAT_PATH, uid, pid);
 

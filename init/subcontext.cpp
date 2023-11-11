@@ -258,6 +258,9 @@ void Subcontext::Fork() {
         auto child_fd_string = std::to_string(child_fd);
         const char* args[] = {init_path.c_str(), "subcontext", context_.c_str(),
                               child_fd_string.c_str(), nullptr};
+
+        LOG(INFO) << "Starting subcontext init " << init_path;
+
         execv(init_path.data(), const_cast<char**>(args));
 
         PLOG(FATAL) << "Could not execv subcontext init";

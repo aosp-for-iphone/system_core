@@ -111,6 +111,26 @@ static bool FindVbdDevicePrefix(const std::string& path, std::string* result) {
     return true;
 }
 
+static bool FindLoopDevicePrefix(const std::string& path, std::string* result) {
+    result->clear();
+
+    if (!StartsWith(path, "/devices/virtual/block/loop")) return false;
+
+    /* Beginning of the prefix is the initial "loop" after "/block/" */
+    std::string::size_type start = 27;
+
+    /* End of the prefix is one path '/' later, capturing the
+       loop device ID. Example: 0 */
+    auto end = path.find('/', start);
+    if (end == std::string::npos) return false;
+
+    auto length = end - start;
+    if (length == 0) return false;
+
+    *result = path.substr(start, length);
+    return true;
+}
+
 // Given a path that may start with a virtual dm block device, populate
 // the supplied buffer with the dm module's instantiated name.
 // If it doesn't start with a virtual block device, or there is some
@@ -346,6 +366,8 @@ std::vector<std::string> DeviceHandler::GetBlockDeviceSymlinks(const Uevent& uev
         type = "pci";
     } else if (FindVbdDevicePrefix(uevent.path, &device)) {
         type = "vbd";
+    } else if (FindLoopDevicePrefix(uevent.path, &device)) {
+        type = "loop";
     } else if (FindDmDevicePartition(uevent.path, &partition)) {
         return {"/dev/block/mapper/" + partition};
     } else {
@@ -359,6 +381,7 @@ std::vector<std::string> DeviceHandler::GetBlockDeviceSymlinks(const Uevent& uev
     auto link_path = "/dev/block/" + type + "/" + device;
 
     bool is_boot_device = boot_devices_.find(device) != boot_devices_.end();
+LOG(INFO) << "found " << type << " device " << device << " is_boot_device " << (is_boot_device ? "true" : "false");
     if (!uevent.partition_name.empty()) {
         std::string partition_name_sanitized(uevent.partition_name);
         SanitizePartitionName(&partition_name_sanitized);
